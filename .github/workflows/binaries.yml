@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  # PR 上也要跑：改动经分支 + PR 提审，审的人必须看到 test 与四平台构建的结果，
+  # 否则「CI 绿」只是 main 上的事，PR 本身没被验过。release 步骤另有 tag 门禁，PR 不发版。
+  pull_request:
   workflow_dispatch:
 
 permissions:
