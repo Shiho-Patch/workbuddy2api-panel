@@ -211,7 +211,7 @@ func TestMultimodalTextPartOnly(t *testing.T) {
 		map[string]any{"type": "text", "text": ccIdentity},
 		imgPart,
 	}
-	out, changed := sanitizeContent(content)
+	out, changed := sanitizeContent(content, false)
 	if !changed {
 		t.Fatal("expected change")
 	}
@@ -388,41 +388,75 @@ func TestChatStreamWireBodySanitizeDisabled(t *testing.T) {
 	}
 }
 
-// DSH 的身份句是短语级指纹：上游按逐字匹配拦（400 11-128 unapproved channel），
-// 换一个词即绕过。钉住三条：命中改写、只含品牌词也走净化（特征预检不得漏）、
-// 改写结果不再含原始短语（可重复处理）。
-func TestDeepSeekHarnessBrandRewritten(t *testing.T) {
+// DSH 的品牌词是短语级指纹：上游按逐字匹配拦（400 11-128 unapproved channel），
+// 换一个词即绕过。只对 system/developer 生效——user/assistant/tool 是用户数据，
+// 实测同一短语放进 user 消息不会触发拦截，改写只会污染用户输入。
+func TestDeepSeekHarnessBrandRewrittenInIdentity(t *testing.T) {
 	in := "You are an AI agent powered by DeepSeek Harness.\n\nCheck the exit code."
-	out := sanitizeText(in)
+	out := sanitizeTextIdentity(in)
 	if strings.Contains(out, "DeepSeek Harness") || !strings.Contains(out, "DeepSeekRuntime") {
 		t.Fatalf("brand word not rewritten: %q", out)
 	}
 	if !strings.HasPrefix(out, "You are an AI agent powered by DeepSeekRuntime.") {
 		t.Errorf("surrounding text changed: %q", out)
 	}
-	if again := sanitizeText(out); again != out {
+	if again := sanitizeTextIdentity(out); again != out {
 		t.Errorf("not idempotent: %q -> %q", out, again)
 	}
 }
 
-// 预检快路径：文本只含品牌词、不含任何其它指纹，也必须进入净化。
+// 预检快路径：身份消息里只含品牌词、不含任何其它指纹，也必须进入净化；
+// 非身份消息不得命中，否则 sanitizeText 末尾的 TrimSpace 会裁掉用户原文空白。
 func TestDeepSeekHarnessDetected(t *testing.T) {
-	if !hasFingerprint("You are interacting through the DeepSeek Harness Web GUI.") {
-		t.Error("brand word should hit the fast path")
+	const onlyBrand = "You are interacting through the DeepSeek Harness Web GUI."
+	if hasFingerprint(onlyBrand) {
+		t.Error("brand word must not hit the global fast path")
+	}
+	if out := sanitizeTextIdentity(onlyBrand); !strings.Contains(out, "DeepSeekRuntime") {
+		t.Errorf("identity text with only brand word not rewritten: %q", out)
 	}
 }
 
-// 走完 prepareBody 全链路：system 与 user 里的品牌词都出站前改掉。
+// 用户输入只含品牌词时必须原样保留：连首尾空白都不能动。
+func TestDeepSeekHarnessUserContentUntouched(t *testing.T) {
+	const in = "  DeepSeek Harness  "
+	msgs := []any{
+		map[string]any{"role": "user", "content": in},
+		map[string]any{"role": "assistant", "content": "DeepSeek Harness"},
+	}
+	if sanitizeMessages(msgs) {
+		t.Fatal("non-identity messages should not change")
+	}
+	if got := msgs[0].(map[string]any)["content"].(string); got != in {
+		t.Errorf("user content altered: %q", got)
+	}
+	if got := msgs[1].(map[string]any)["content"].(string); got != "DeepSeek Harness" {
+		t.Errorf("assistant content altered: %q", got)
+	}
+}
+
+// developer 与 system 一样按身份消息处理。
+func TestDeepSeekHarnessDeveloperRewritten(t *testing.T) {
+	msgs := []any{map[string]any{"role": "developer", "content": "DeepSeek Harness"}}
+	if !sanitizeMessages(msgs) {
+		t.Fatal("developer message not sanitized")
+	}
+	if got := msgs[0].(map[string]any)["content"].(string); got != "DeepSeekRuntime" {
+		t.Errorf("developer content = %q, want DeepSeekRuntime", got)
+	}
+}
+
+// 走完 prepareBody 全链路：system 的品牌词改写，user 内容原样保留。
 func TestPrepareBodyRewritesDeepSeekHarness(t *testing.T) {
 	body := []byte(`{"model":"deepseek-v4.1-flash","messages":[` +
 		`{"role":"system","content":"You are an AI agent powered by DeepSeek Harness."},` +
 		`{"role":"user","content":"the DeepSeek Harness checkout is here"}]}`)
 	out, _, _ := prepareBodyOpt(body, true, nil, nil, nil, "", "", false)
-	if strings.Contains(string(out), "DeepSeek Harness") {
-		t.Fatalf("brand word survived: %s", out)
+	if !strings.Contains(string(out), "DeepSeekRuntime") {
+		t.Fatalf("system brand not rewritten: %s", out)
 	}
-	if strings.Count(string(out), "DeepSeekRuntime") != 2 {
-		t.Errorf("expected both messages rewritten: %s", out)
+	if strings.Count(string(out), "DeepSeek Harness") != 1 {
+		t.Errorf("user content should keep the brand word: %s", out)
 	}
 }
 
