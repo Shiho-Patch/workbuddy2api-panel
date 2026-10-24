@@ -1923,8 +1923,32 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		//     一次就禁会在上游抖一下时把整池打光（这个坑本项目踩过一次）。死号在阈值
 		//     内仍会被选中重试，但最多 3 次即出池，不再每请求刷 401。
 		if uerr != nil && upstream.IsGatewayUnauthorized(uerr.Status, body) {
+			// ⭐ 先 refresh 验证，再决定是否计死（20261024 修误杀）。
+			//
+			// 为什么必须验证：网关 401 有两种成因，**响应体完全一样**（APISIX/openresty
+			// 的 HTML 页，无业务信封），单看 401 分不出来：
+			//   a) token 真失效 → refresh 必然被拒 → 该禁用；
+			//   b) 网关瞬时拦截（风控/边缘节点抖动/并发限流）→ refresh 仍成功 → 不该罚。
+			// 实测（20261024）：两个账号各 3 次 401 被禁用，revive 后立刻恢复正常
+			// （连续 3 次请求全 200），属情形 b。按 401 次数禁用会误杀健康账号，
+			// 而误杀一个健康号的代价（要人工重登）远大于多试一次 refresh。
+			//
+			// 代价：每个网关 401 多一次 refresh 往返。实测 refresh 是轻量端点，且 401 是
+			// 低频事件，可接受。
+			if acct := h.cfg.Pool.AuthByUID(uid); acct != nil {
+				rerr := h.cfg.Upstream.VerifySessionAlive(acct)
+				if rerr == nil {
+					// refresh 成功 = session 仍有效：401 属网关瞬时拦截。
+					// 清零计数（防多次瞬时拦截累积成 3 次），按软冷却短退避后重试。
+					h.cfg.Pool.NoteSessionAlive(uid)
+					h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Time{}, "gateway 401 (refresh ok, transient)")
+					log.Printf("INFO: [server] 账号 %s 网关 401，但 refresh 成功 → 判为瞬时拦截，不计 session dead",
+						logfmt.Label(uid, ""))
+					return
+				}
+			}
 			if h.cfg.Pool.NoteSessionDeadWith(uid, gatewayUnauthorizedReason) {
-				log.Printf("WARN: [server] 账号 %s 连续 %d 次网关 401（token 被上游判无效）→ 禁用，需重新登录",
+				log.Printf("WARN: [server] 账号 %s 连续 %d 次网关 401 且 refresh 失败（token 确实失效）→ 禁用，需重新登录",
 					logfmt.Label(uid, ""), pool.SessionDeadThreshold())
 			}
 			return
