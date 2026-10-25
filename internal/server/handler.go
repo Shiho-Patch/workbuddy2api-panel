@@ -1126,20 +1126,27 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// token 临近过期 → 先 refresh（失败冷却换号）
 		if acct.NeedsRefresh(h.cfg.RefreshSkew) {
 			if err := h.cfg.Upstream.RefreshTokenIfNeeded(acct, h.cfg.RefreshSkew); err != nil {
-				lastErr = err
 				var ue *upstream.Error
-				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
-					h.cfg.Pool.Disable(acct.UID, "refresh session dead")
+				// refresh token 失效 ≠ 账号不可用：AT 尚未过期时本请求仍会成功
+				// （issue #83 生产实测：refresh 恒 12153 的号 chat 仍 200）。
+				// 这种号不罚、也不换号——直接拿现有 AT 发这一次请求。
+				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && upstream.SessionDeadButUsable(acct) {
+					log.Printf("INFO: [server] 账号 %s refresh token 已失效但 access token 仍有效，用现有 token 继续",
+						logfmt.Label(acct.UID, acct.Nickname))
 				} else {
-					h.cfg.Pool.NoteError(acct.UID)
+					lastErr = err
+					if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
+						h.cfg.Pool.Disable(acct.UID, "refresh session dead")
+					} else {
+						h.cfg.Pool.NoteError(acct.UID)
+					}
+					fail(acct.UID)
+					if !rotateBackoff(i, r.Context()) {
+						break // ctx 取消：终止轮转（refresh 失败换号退避）
+					}
+					continue
 				}
-				fail(acct.UID)
-				if !rotateBackoff(i, r.Context()) {
-					break // ctx 取消：终止轮转（refresh 失败换号退避）
-				}
-				continue
-			}
-			if err := acct.SaveAtomicRetry(); err != nil {
+			} else if err := acct.SaveAtomicRetry(); err != nil {
 				// 刷新成功但落盘失败：下次启动会用旧 token，必须暴露
 				log.Printf("ERR: [server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
 			}
@@ -1592,8 +1599,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 字符串反而让各家各猜一套（见 modelBlockAllQuota 分支）。
 	quotaCode := 0
 	// gateway_hint（末端透传）：上游错误按 Kind + 原文 + 请求形态判定；本地调度类
-	// 错误（无上游原文）固定 no_healthy_account hint。
-	hint := upstream.NoHealthyAccountHint()
+	// 错误（无上游原文）走 noHealthyHint —— 裸名落错域时改写成带前缀的指引。
+	hint := h.noHealthyHint(routeModel, realm, bareModel)
 	// upstreamMsgPassed 记录 error.message 是否已被上游原文占据：模型级阻塞分支
 	// 据此决定要不要覆盖 msg（上游原文优先，含 requestId）。
 	upstreamMsgPassed := false
@@ -2301,6 +2308,28 @@ func (h *Handler) hintContext(bareModel string, hasImage bool) upstream.HintCont
 // gateway_hint 文案（upstream.GatewayHint 单一事实来源）。uerr 为 nil 时回落
 // body 原文判定（防御路径）。transport 层错误（lastErr 非 *upstream.Error 且
 // 上游没回 body）→ 无 hint（不编造）。
+// noHealthyHint 选号失败（no_healthy_account）的 gateway_hint。
+//
+// 裸模型名默认落 cn 域：池里若只有另一域的号，选号必然失败，而固定文案指向的
+// /status 永远是健康的——客户端据此只会一直重试，看不到真正该改的是模型名。
+// 这里在「请求确实是裸名」且「另一域有该模型的健康号」时，改写成可操作的带前缀
+// 写法；其余情况一律退回固定文案（不编造能力事实）。
+//
+// 显式带前缀的请求不做改写：前缀不是它失败的原因，建议换域反而误导。
+func (h *Handler) noHealthyHint(routeModel, realm, bareModel string) string {
+	if routeModel != bareModel {
+		return upstream.NoHealthyAccountHint()
+	}
+	other := "global"
+	if realm == "global" {
+		other = "cn"
+	}
+	if len(h.cfg.Pool.AvailableUIDsForModelRealm(bareModel, other)) > 0 {
+		return upstream.NoHealthyAccountHintForModel(bareModel, other)
+	}
+	return upstream.NoHealthyAccountHint()
+}
+
 func (h *Handler) hintOf(kind upstream.ErrKind, body, bareModel string, hasImage bool, uerr *upstream.Error) string {
 	msg := body
 	if uerr != nil && uerr.Msg != "" {
