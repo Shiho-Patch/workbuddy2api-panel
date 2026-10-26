@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1
 FROM golang:1.26.10-alpine AS build
 WORKDIR /src
+
+# 版本号注入：与 .github/workflows/binaries.yml 保持一致（-X main.appVersion）。
+# 不传则保持 dev，与本地 go build 行为一致。
+ARG APP_VERSION=dev
 COPY go.mod ./
 RUN go mod download
 COPY . .
