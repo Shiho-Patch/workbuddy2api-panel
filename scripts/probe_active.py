@@ -17,9 +17,11 @@
   - 单账号同接口间隔 >=1.05s（--gap）
   - body 必须含 userId 字段，否则服务端 200 但静默丢弃
 """
+import os
 import json, os, sys, time, glob, argparse, urllib.request, urllib.error
 
-AUTHS = "/root/workbuddy2api/auths"
+# 账号目录：默认对齐上游部署布局；容器内（/app/auths）或其它布局用 WB2A_AUTHS 覆盖。
+AUTHS = os.environ.get("WB2A_AUTHS", "/root/workbuddy2api/auths")
 CHAT_BASE = "https://copilot.tencent.com"   # growth / report
 BILL_BASE = "https://www.codebuddy.cn"      # billing / report
 
@@ -27,7 +29,9 @@ def cred(prefix):
     hits = glob.glob(os.path.join(AUTHS, f"workbuddy-{prefix}*.json"))
     if not hits:
         raise SystemExit(f"no auth for {prefix}")
-    d = json.load(open(hits[0]))
+    # auth 文件是 UTF-8：Windows 上 open() 默认用 locale 代码页（中文系统 GBK），
+    # 非 ASCII 昵称会 UnicodeDecodeError（task_common.py 同款修复）。
+    d = json.load(open(hits[0], encoding="utf-8"))
     a, acc = d["auth"], d["account"]
     return {"token": a["accessToken"], "domain": a.get("domain") or "",
             "uid": acc["uid"], "nick": acc.get("nickname", ""),

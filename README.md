@@ -260,7 +260,7 @@ CI 会自动构建多架构镜像（`amd64` / `arm64`）并发布到 GHCR：
 ```bash
 # 1. 准备配置与数据目录
 mkdir -p auths data && cp config.example.json config.json
-#    建议编辑 config.json 设置 api_key（或留空由程序自动生成随机密钥）
+#    建议编辑 config.json 设置 api_key（仅在 config.json 不存在时首启才会自动生成随机密钥；已存在的空值 = 完全不鉴权，请务必填写）
 
 # 2. 拉取并运行
 docker run -d --name workbuddy2api \
@@ -286,7 +286,7 @@ cd workbuddy2api-panel
 
 # 2. 准备配置（compose 挂载此文件，缺失会导致容器启动失败）
 cp config.example.json config.json
-#    建议编辑 config.json 设置 api_key（或留空由程序自动生成随机密钥）
+#    建议编辑 config.json 设置 api_key（仅在 config.json 不存在时首启才会自动生成随机密钥；已存在的空值 = 完全不鉴权，请务必填写）
 
 # 3. 启动（首次会构建镜像，约 1-2 分钟）
 docker compose up -d --build
@@ -465,12 +465,12 @@ curl -s http://localhost:7863/v1/messages \
 | `upstream.timeout_seconds` | `120` | 短 RPC（刷新 / 签到 / 余额 / 模型列表）总时长上限；改动需重启 |
 | `upstream.header_timeout_seconds` | 回落 `timeout_seconds` | 聊天首字节前（响应头）上限；改动需重启（它也是「轮转最坏耗时」的分母：单请求最坏 ≈ 本值 × 换号次数） |
 | `upstream.idle_timeout_seconds` | `300` | 聊天流中空闲上限（活跃续命，静默断流）；改动需重启 |
-| `upstream.user_agent` | 空 | 出站 User-Agent 覆盖（空 = 现状 `CLI/2.63.2 CodeBuddy/2.63.2`）。官网「使用端」列按出站 UA 服务端归因；官方 WorkBuddy 桌面 UA 为 `WorkBuddy/<version>`，需要时可配 |
+| `upstream.user_agent` | 空 | 出站 User-Agent 覆盖（空 = 官方现状三段式：CN `WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0`、global `WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0`，版本段随官方分发包更新、可经 `upstream.client_version` / `upstream.cli_version` 单独覆盖）。官网「使用端」列按出站 UA 服务端归因 |
 | `features.sanitize_blacklist_fingerprints` | `true` | 出站请求体黑名单指纹脱敏 |
 | `features.sanitize_brand_scope` | `all` | 品牌词（`DeepSeekRuntime`）规则作用域：`all` = 所有消息角色（与既有行为一致）；`identity` = 只改 `system` / `developer`，user / assistant / tool 历史与 `tool_calls` 参数按用户数据原样透传（实测这些位置不触发 `11-128`）。面板「品牌词作用域」保存后**热生效**，环境变量 `WB2A_SANITIZE_BRAND_SCOPE` |
 | `models.hidden` | `[]` | 模型黑名单：`["deepseek-pro"]` 裸名隐藏两域，`["cn:legacy-model"]` / `["global:x"]` 只隐藏该域。**列表不列 + 点名调用直接拒绝**（`/v1/models` 过滤、`/v1/chat/completions` 与 `/v1/images/*` 拒绝）——只藏列表不够，知道名字仍可硬调。面板「模型黑名单」（逗号分隔）保存后**热生效** |
 | `models.aliases` | `[]` | 模型映射（issue #30）：`["claude-opus-4=glm-5.2"]`，客户端只能填固定模型名的 agent 靠它落到真实模型。键大小写不敏感；裸名键两域生效，`cn:`/`global:` 前缀键只在该域生效；值可带前缀跨域指向（`"my-gpt=global:gpt-5.4"`）。映射在**黑名单检查之前**完成（别名不能绕过 `models.hidden`），出站 body / 选号 / 粘性 / 账本全用真实名，响应 `model` 回显客户端原发名（严格校验模型名的客户端不会报错）。面板「模型映射」（逗号分隔）保存后**热生效** |
-| `prompt.mode` | `custom` | 系统提示词模式：`custom` = 网关用自有提示词替换客户端 system；`append` = 开头连续 system/developer 块后插网关提示词（既有消息逐字不动）；`passthrough` = 透传客户端原始 system（降级重试仍切中性提示词） |
+| `prompt.mode` | `passthrough` | 系统提示词模式：`custom` = 网关用自有提示词替换客户端 system；`append` = 开头连续 system/developer 块后插网关提示词（既有消息逐字不动）；`passthrough` = 透传客户端原始 system（降级重试仍切中性提示词） |
 | `prompt.file` | 空 | 提示词文件路径；空 = 内置默认（约 2KB）；路径非空但不可读 → 启动报错 |
 | `upstash.url` / `upstash.token` | 空 | 空 = 纯内存模式（Noop 降级，功能照常） |
 | `pool.max_in_flight` | `3` | 单账号最大在途请求数（`0` = 不限） |
@@ -478,7 +478,7 @@ curl -s http://localhost:7863/v1/messages \
 | `pool.degrade_threshold` | `5` | 连败降权阈值：未知错误（ErrClient/传输层）连败 N 次临时出池 |
 | `pool.degrade_cooldown` / `pool.degrade_cooldown_max` | `10m` / `2h` | 连败降权时长与上限钳制 |
 | `pool.cost_explore_interval` | `30m` | costTier 条件探索窗口：免费层垄断且存在未知号时，每窗口把一个真实请求搭车改道给未知号（零新增上游请求；成功即毕业，失败走既有错误策略）。`0` = 关停 |
-| `pool.credit_floor` | `100` | **积分保底**：账号余额低于该值时，对**实测收费**模型（tier 2，账本 6h 内有效观测）不再参与选号——防止收费模型把余额打穿、连免费模型都 402 冷却到次日签到（最坏约 11.5 小时不可用）。tier 0（实测免费）**不受限**；tier 1（无观测）按目录倍率分档（见下一行）。含会话粘性路径（粘性号触底则解绑换号）。全池触底且全 tier 2 时选号返回空（网关回 503），**不放行**。签到回血越过 floor 即刻自动恢复。`0` = 关闭 |
+| `pool.credit_floor` | `0`（关闭） | **积分保底**：账号余额低于该值时，对**实测收费**模型（tier 2，账本 6h 内有效观测）不再参与选号——防止收费模型把余额打穿、连免费模型都 402 冷却到次日签到（最坏约 11.5 小时不可用）。tier 0（实测免费）**不受限**；tier 1（无观测）按目录倍率分档（见下一行）。含会话粘性路径（粘性号触底则解绑换号）。全池触底且全 tier 2 时选号返回空（网关回 503），**不放行**。签到回血越过 floor 即刻自动恢复。`0` = 关闭 |
 | `pool.credit_floor_max_rate` | `0` | **保底倍率上限**：账本无观测（tier 1）时，目录倍率 ≤ 该值才在触底号上放行——让便宜的新模型（如 `x0.11`）跑出第一笔实测入账，贵的（如 `x1.62`）仍按收费拦（避免 kimi-k3-1 那类「两笔打穿 100 分号」的事故复现）。`0` = 严格模式（任何已知正倍率都拦，即历史行为，升级不静默放宽）。面板「保底倍率上限」可改，热生效 |
 | `pool.model_fallback` | 空 | **模型降级路由**：`{"deepseek-v4.1-flash":"deepseek-v4-flash"}`。上游 `6004`「该模型使用量超限」是**模型级**限流（实测见过 8 小时窗口），此时账号本身健康、等价模型完全可用——配了这张表就**同账号改道等价模型**继续服务，而不是让客户端等重置。仅 `6004`（`ErrSoftRate` + `IsModelRateLimit`）触发，`11102` / `11101` / 普通 429 / 5xx 都不降级；冷却仍记在**原模型**名下（记成等价模型会把好的也冷却掉，降级白做）；**不写持久状态**，冷却到期自动回原模型。全池该模型都在冷却（选号返回空）时也会先试降级再报 503。缺省空 = 不降级（老配置零影响），面板保存后热生效 |
 | `pool.breaker_threshold` | `3` | 连续失败触发熔断阈值 |
@@ -509,7 +509,17 @@ curl -s http://localhost:7863/v1/messages \
 
 加载顺序：JSON 文件 → `WB2A_*` 环境变量（变量非空才覆盖）：
 
-`WB2A_LISTEN` · `WB2A_API_KEY` · `WB2A_AUTH_DIR` · `WB2A_STATE_FILE` · `WB2A_MAX_BODY_MB` · `WB2A_SOFT_RATE`(duration) · `WB2A_SOFT_RATE_MAX`(duration) · `WB2A_TIMEOUT_SECONDS` · `WB2A_HEADER_TIMEOUT_SECONDS` · `WB2A_IDLE_TIMEOUT_SECONDS` · `WB2A_USER_AGENT` · `WB2A_SANITIZE_FINGERPRINTS`(bool) · `WB2A_PROMPT_MODE` · `WB2A_PROMPT_FILE`
+基础：`WB2A_LISTEN` · `WB2A_API_KEY` · `WB2A_AUTH_DIR` · `WB2A_STATE_FILE` · `WB2A_DNS` · `WB2A_PREFER_EXPIRING`(duration)
+
+上游与超时：`WB2A_TIMEOUT_SECONDS` · `WB2A_HEADER_TIMEOUT_SECONDS` · `WB2A_IDLE_TIMEOUT_SECONDS` · `WB2A_SOFT_RATE`(duration) · `WB2A_SOFT_RATE_MAX`(duration) · `WB2A_USER_AGENT` · `WB2A_CLIENT_VERSION` · `WB2A_CLI_VERSION` · `WB2A_CLIENT_NAME` · `WB2A_DEVICE_TOKEN` · `WB2A_DEVICE_TOKEN_FILE` · `WB2A_DUMP_UPSTREAM`
+
+提示词与脱敏：`WB2A_PROMPT_MODE` · `WB2A_PROMPT_FILE` · `WB2A_SANITIZE_FINGERPRINTS`(bool) · `WB2A_SANITIZE_BRAND_SCOPE`
+
+排程与杂项：`WB2A_SCHEDULE_JITTER_MINUTES` · `WB2A_SCHEDULE_NIGHT_ACCOUNT_CAP` · `WB2A_SCHEDULE_ACCOUNT_SPREAD_MINUTES` · `WB2A_SCHEDULE_ACCOUNT_SPREAD_MIN_GAP_SECONDS` · `WB2A_SCHEDULE_BALANCE_REFRESH_JITTER_PERMILL` · `WB2A_SCHEDULE_TASK_SWEEP_JITTER_PERMILL` · `WB2A_EXPIRING_SOON`(duration) · `WB2A_PASSTHROUGH_IP`
+
+管理面：`WB2A_ADMIN_ENABLED` · `WB2A_ADMIN_AUDIT_ENABLED` · `WB2A_ADMIN_AUDIT_FILE` · `WB2A_METRICS_ENABLED` · `WB2A_ALERTING_ENABLED` · `WB2A_ALERTING_WEBHOOK_URL` · `WB2A_BUDGET_DAILY_CREDIT_LIMIT`
+
+> 完整清单以 `cmd/server/config.go` 的 `applyEnv` 为准（此前此处列过 `WB2A_MAX_BODY_MB`——请求体上限早已移除，该变量不存在）。
 
 ## 核心行为语义
 
@@ -524,9 +534,9 @@ curl -s http://localhost:7863/v1/messages \
 
 | 模式 | 语义 |
 |---|---|
-| `custom`（默认） | 出站前用网关自有提示词**替换**客户端 system / developer 消息（删除全部 system / developer，头部插入单条 system）；user / assistant / tool 消息逐字不动 |
+| `custom` | 出站前用网关自有提示词**替换**客户端 system / developer 消息（删除全部 system / developer，头部插入单条 system）；user / assistant / tool 消息逐字不动 |
 | `append` | 开头连续 system / developer 块之后**插入**一条网关自有 system，既有消息（含客户端项目规范/工具约定）逐字不动——两者并用；降级期退化为 replace（带指纹原文重试只会确定性再撞 400） |
-| `passthrough` | 透传客户端原始 system，不做改写 |
+| `passthrough`（默认） | 透传客户端原始 system，不做改写 |
 
 内置默认提示词约 2KB（`internal/prompt/defaultprompt.md`，嵌入二进制）。`prompt.file` 指向自定义提示词文件（自定义人格 / 人设）即整体替换内置默认；**留空 = 内置默认**，路径非空但不可读 → **启动报错**（fail fast，不会静默回落到内置默认）。
 
@@ -791,7 +801,7 @@ WARN: [server] stream ...: saw M native tool call block(s) but repaired none (to
 
 **补领清扫**（`schedule.task_sweep_enabled`，缺省开启）：每 `task_sweep_minutes`（缺省 15）分钟遍历可用账号，只做两件事——accept 掉 `not_accepted` 的任务（默认口径与小程序口径分开提交），claim 掉 `progress` 已达标但未领的任务（mp 专属码走 mp 领奖端点）。它**不跑任何行为链路**，与 `autoActions` 白名单无关，属于纯补领兜底。
 
-为什么需要它：新号自动跑成长任务时，任务往往还没达标（`awaiting_progress`），而成长队列一天只跑一次（`schedule.growth_hours` 缺省 01:00）、白名单外的任务码永远进不了队列——于是「任务达标了、面板进度是满的、积分却不涨」没有任何补领路径。领奖判据只取 `progress`（`Task.Claimable`）而不是 `accept_status`：后者会在回读时短暂转 `completed` 随后被整体回滚，据此领奖会误领。领奖幂等（重复领返回 `already_claimed` → 0 分 0 能），所以宁可多跑一轮也不漏领。已禁用 / 国际区 / 企业版账号一个上游请求都不发；正在跑任务动作的账号本轮让位（与单任务 / 一键完成 / 成长队列共用 per-account 锁）。
+为什么需要它：新号自动跑成长任务时，任务往往还没达标（`awaiting_progress`），而成长队列一天只跑一次（`schedule.growth_hours` 缺省 `[11]`，即每天 11:00）、白名单外的任务码永远进不了队列——于是「任务达标了、面板进度是满的、积分却不涨」没有任何补领路径。领奖判据只取 `progress`（`Task.Claimable`）而不是 `accept_status`：后者会在回读时短暂转 `completed` 随后被整体回滚，据此领奖会误领。领奖幂等（重复领返回 `already_claimed` → 0 分 0 能），所以宁可多跑一轮也不漏领。已禁用 / 国际区 / 企业版账号一个上游请求都不发；正在跑任务动作的账号本轮让位（与单任务 / 一键完成 / 成长队列共用 per-account 锁）。
 
 ## 🖥️ Web 管理面板
 
@@ -841,10 +851,14 @@ http://127.0.0.1:7863/panel/
 | `POST /v1/messages`、`POST /messages` | Bearer 或 `x-api-key`（`api_key` 非空时） | `anthropic_messages`：Anthropic Messages 入站，转成现有 chat 完成并回写 Messages JSON / SSE。不回传 thinking（上游没有 signature） |
 | `GET /v1/responses` | Bearer（`api_key` 非空时） | 固定回 **426 Upgrade Required**（带 `Upgrade: websocket`）。Codex 客户端在 `supports_websockets`/`prefer_websockets` 下会先探 WS 升级，426 是它**立刻且粘性**回落 HTTPS 的信号；否则它要空转 `stream_max_retries` 次才回落（日志里的 `Reconnecting… n/5`）。本网关不保存 `previous_response_id` / 连接内状态，WS 复用无从谈起 |
 | `GET /v1/models` | Bearer（`api_key` 非空时） | 模型列表（纯动态拉取，缓存 1h；失败返回空列表 + 5min 负缓存）；**国际版（global）目录以官方桌面端 UA 族为准**——只有该族下发的模型进目录，IDE/CLI 族与企业端点只用来补同 id 的 context/efforts/倍率等字段（issue #216：另两族的独有模型实测在 chat 端点回 11102，列出来只会让客户端选到死模型）；每模型带 `context_length`/`max_output_tokens`（四级查找链：上游目录 → 内置知识表 → model.json 缓存 → models.dev）、`reasoning_supported_efforts`/`reasoning_default_effort` 思考档位及描述/标签/倍率等全字段（上游有返回时） |
+| `POST /v1/images/generations` | Bearer（`api_key` 非空时） | 文生图（`internal/server/images.go`）。模型用 realm 前缀点名：`cn:hunyuan-image-alpha`（缺省）/ `global:hy-image-3.5`；接受 JSON 或 multipart；换号重试与积分记账同 chat 口径 |
+| `POST /v1/images/edits` | Bearer（`api_key` 非空时） | 图生图（`cn:hunyuan-image-alpha-edit` 等；multipart 就地转 JSON），其余口径同上 |
+| `POST /v1/search` | Bearer（`api_key` 非空时） | 联网检索（官方 agenttool；snippet 快路径约 1s，`deep:true` 走综述式检索 18~66s，详见「核心能力」） |
+| `POST /v1/fetch` | Bearer（`api_key` 非空时） | 网页抓取（`{"url":...}` → markdown，透传官方 webfetch） |
 | `GET /status` | Bearer（`api_key` 非空时） | 账号状态汇总 + 每账号详情（积分/冷却/熔断/在途/粘性）+ `model_locks`（模型级限流全清单，无锁为 null） |
 | `GET /healthz` | 无 | 健康检查：有 healthy 且未占满账号返回 200，否则 503；响应带身份标识（见下） |
 | `GET /metrics` | Bearer（`metrics.enabled` 时才存在） | Prometheus 文本。缺省不注册 |
-| `POST /admin/tasks/{name}/run` | Bearer（`admin.enabled` 时才存在） | 立刻补跑 `checkin` / `activity` / `keepalive` / `travel` / `blackcat`，202，同名在跑则 409 |
+| `POST /admin/tasks/{name}/run` | Bearer（`admin.enabled` 时才存在） | 立刻补跑 `checkin` / `activity` / `keepalive` / `travel` / `blackcat` / `growth`，202，同名在跑则 409 |
 
 成功的 chat 响应带 `X-Wb-Account`（实际应答账号的 uid）。`budget.daily_credit_limit` 大于 0 时，当日已观测扣费到顶后 chat 回 429 `daily_budget_exceeded`。`schedule.jitter_minutes` 把排程从整点摊开，0 仍是整点。`admin.audit_enabled` 把 /admin 操作追加到 `admin.audit_file`。`alerting.enabled` 在健康账号数、熔断数或 WAF 拦截越界时 POST webhook。这四项改完要重启；`budget.daily_credit_limit` 和 `jitter_minutes` 保存后即生效。
 
@@ -900,7 +914,7 @@ http://127.0.0.1:7863/panel/
 | `activity/growth/tasks/accept` | POST | 接受任务（`{"task_codes":[...]}`） |
 | `activity/growth/tasks/<task_code>/claim` | POST | **领取任务奖励**（任务码在路径、无 body；**Web 域 `www.workbuddy.cn`**，非 CLI 域——这是领奖能成功的关键） |
 
-出站请求统一携带 `CLI/2.63.2 CodeBuddy/2.63.2` UA（可被 `upstream.user_agent` 覆盖）；聊天请求带账号头（`X-User-Id` 等），**永不携带 `X-Refresh-Token`**（该头只出现在 token 刷新请求）。领奖请求额外带 `x-client-platform: web` 与 workbuddy.cn 的 Origin/Referer。
+出站请求携带官方 WorkBuddy 三段式 UA（CN `WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0`、global `WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0`；可被 `upstream.user_agent` 覆盖）；聊天请求带账号头（`X-User-Id` 等），**永不携带 `X-Refresh-Token`**（该头只出现在 token 刷新请求）。领奖请求额外带 `x-client-platform: web` 与 workbuddy.cn 的 Origin/Referer。
 
 ## 请求级日志
 
@@ -1073,35 +1087,35 @@ sudo chown -R 10001:10001 ./auths ./data ./config.json
 
 ### 系统提示词被内容策略误杀怎么办？
 
-默认 `prompt.mode=custom` 已用网关自有提示词替换客户端 system，从源头消除大部分误报；用户 / assistant 消息中的指纹串由 `features.sanitize_blacklist_fingerprints` 清洗，两层叠加。`passthrough` 模式下首遇拦截会自动换 Degraded 中性提示词同请求重试一次。
+默认 `prompt.mode=passthrough` 不改写客户端 system，首遇审核拦截会自动换 Degraded 中性提示词同请求重试一次；用户 / assistant 消息中的指纹串由 `features.sanitize_blacklist_fingerprints` 清洗。需要「从源头消除大部分误报」可显式设为 `custom`（网关自有提示词替换客户端 system / developer），两层叠加。
 
 ### 如何让官网「使用端」列显示为 WorkBuddy？
 
-官网「使用端」列按出站请求 UA 服务端归因。配置 `upstream.user_agent: "WorkBuddy/2.x.x"`（或环境变量 `WB2A_USER_AGENT`）即可改写全部出站请求的 UA；默认保持 `CLI/2.63.2 CodeBuddy/2.63.2` 现状（指纹净化考虑，可配而非改死）。
+官网「使用端」列按出站请求 UA 服务端归因。配置 `upstream.user_agent: "WorkBuddy/2.x.x"`（或环境变量 `WB2A_USER_AGENT`）即可改写全部出站请求的 UA；默认即官方 `WorkBuddy/<ver> <brand>/<ver> CLI/<ver>` 三段式（按 realm 取分发包版本，整体或按版本段均可覆盖）。
 
 ## 关键断言 ↔ 代码出处
 
 | 断言 | 出处 |
 |---|---|
-| `prompt.mode` 默认 `custom` | `cmd/server/config.go:148` |
+| `prompt.mode` 默认 `passthrough` | `cmd/server/config.go:440` |
 | 请求体无网关侧上限（max_body_mb 已移除） | `internal/server/handler.go` chatCompletions 读 body 段 |
-| 出站强制 `stream:true` | `internal/upstream/payload.go:28` |
-| DeepSeek 思维链注入（`thinking.type=enabled`） | `internal/upstream/thinking.go:110` |
+| 出站强制 `stream:true` | `internal/upstream/payload.go:91` |
+| DeepSeek 思维链注入（`thinking.type=enabled`） | `internal/upstream/thinking.go:172`（`injectThinking`） |
 | 默认 `reasoning_effort` 档位 = `high` | `internal/upstream/thinking.go:32` |
-| `reasoning_content` 多轮回填（assistant 消息） | `internal/upstream/thinking.go:54` |
+| `reasoning_content` 多轮回填（assistant 消息） | `internal/upstream/thinking.go:60`（`backfillReasoningContent`） |
 | Degraded 中性提示词常量 | `internal/prompt/prompt.go:25` |
-| 降级触发与次日 00:00 CST 重置 | `internal/server/degrade.go:30`（Trigger）、`:46`（nextMidnightCST） |
-| 6004 模型级限流 code 与重置时间解析 | `internal/upstream/client.go:127`、`internal/upstream/client.go:147` |
-| `11101` / Unmarshal 失败不罚号 | `internal/upstream/client.go:114-115`；处理分支 `internal/server/handler.go:489` |
-| 出站 UA 覆盖（空 = 现状 `CLI/2.63.2 CodeBuddy/2.63.2`） | `cmd/server/config.go:73`；接线 `cmd/server/main.go:96` |
-| session-dead 连续阈值 3 才禁用 | `internal/pool/pool.go:249-253`（`sessionDeadThreshold`） |
-| `ReviveDisabled` 人工复活 | `internal/pool/pool.go:951` |
-| disabled 账号透出 `disabled_reason` | `internal/pool/pool.go:1162-1165` |
-| 硬冷却至次日 04:00 | `internal/pool/pool.go:882`（`CooldownUntilTomorrow4AM`） |
-| 软冷却退避封顶 2h | `internal/pool/pool.go:247`（`defaultSoftRateMax`） |
-| Top-5 候选短名单 | `internal/pool/pool.go:584` |
-| `activity_hours` 默认 `[10]` | `cmd/server/config.go:135` |
-| 活跃自检回读 streak | `internal/scheduler/scheduler.go:227`（`checkActivityStreak`） |
+| 降级触发与次日 00:00 CST 重置 | `internal/server/degrade.go:30`（Trigger）、`:39`（nextMidnightCST） |
+| 6004 模型级限流 code 与重置时间解析 | `internal/upstream/client.go:227`、`:219`（`softRateResetLoc`） |
+| `11101` / Unmarshal 失败不罚号 | `internal/upstream/client.go:217`（`badParamsMarkerCode`）；处理分支 `internal/server/handler.go:1336` |
+| 出站 UA 覆盖（空 = 官方 WorkBuddy 三段式，按 realm） | `cmd/server/config.go:203`；接线 `cmd/server/main.go:193`；UA 组装 `internal/upstream/headers.go:84` |
+| session-dead 连续阈值 3 才禁用 | `internal/pool/entry.go:650`（`sessionDeadThreshold`） |
+| `ReviveDisabled` 人工复活 | `internal/pool/state.go:88` |
+| disabled 账号透出 `disabled_reason` | `internal/pool/entry.go:127` |
+| 硬冷却至次日 04:00 | `internal/pool/cooldown.go:600`（`CooldownUntilTomorrow4AM`） |
+| 软冷却退避封顶 2h | `internal/pool/entry.go:630`（`defaultSoftRateMax`） |
+| Top-5 候选短名单 | `internal/pool/pick.go:195`（top5 截断按权重降序） |
+| `activity_hours` 默认 `[10]` | `cmd/server/config.go:413` |
+| 活跃自检回读 streak | `internal/scheduler/scheduler.go:801`（`checkActivityStreak`） |
 | streak 端点 `activity/growth/streak` | `internal/upstream/travel.go:24`（常量）、`:139`（`GrowthStreak`） |
 | Redis 粘性镜像 7 天 TTL | `internal/redisstore/redisstore.go:21` |
 | 静态模型表含 `deepseek-v4-flash` 等 | `internal/server/handler.go:146` |

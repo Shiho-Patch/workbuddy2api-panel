@@ -8,6 +8,11 @@ on:
       - ".github/workflows/autobot.yml"
       - "AutoBot.yml"
       - "scripts/autobot.py"
+  pull_request:
+    paths-ignore:
+      - ".github/workflows/autobot.yml"
+      - "AutoBot.yml"
+      - "scripts/autobot.py"
   workflow_dispatch:
 
 permissions:
@@ -91,7 +96,11 @@ jobs:
           if-no-files-found: error
 
       - name: release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        # ponytail: 只跟 v* 标签发版（AGENTS.md 约定「打时间标签并推送」才是发版）。
+        # 此前 workflow_dispatch 也会 gh release create——dispatch 基于 main HEAD 隐式建
+        # v* 标签，再连带触发镜像发布，等于绕过打标签这条规则；dispatch 现在只构建
+        # 与上传 artifact。
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "v${VERSION}" dist/*.zip --title "v${VERSION}" --generate-notes
